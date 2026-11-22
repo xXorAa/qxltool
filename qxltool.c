@@ -71,6 +71,23 @@ static char *qxl_stpcpy (char *s1, const char *s2)
 # define stpcpy qxl_stpcpy
 #endif
 
+#ifndef HAVE_STRNDUP
+/* strndup is a GNU/POSIX.1-2008 extension; mingw lacks it. Avoid naming the
+   fallback strndup because glibc may declare it built-in. */
+static char *qxl_strndup (const char *s, size_t n)
+{
+    size_t l = 0;
+    char *p;
+    while (l < n && s[l]) l++;
+    p = malloc (l + 1);
+    if (!p) return NULL;
+    memcpy (p, s, l);
+    p[l] = 0;
+    return p;
+}
+# define strndup qxl_strndup
+#endif
+
 
 #ifndef WORDS_BIGENDIAN
 u_short swapword (u_short val)
