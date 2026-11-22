@@ -541,7 +541,7 @@ static int openqxl (QXL * qxl, char *fn)
     {
 	int slot = atoi (hash + 1);
 	char *img = strndup (fn, hash - fn);
-	int partfd = qxcard_open_partition (img, slot, &qxl->base, &qxl->swap);
+	int partfd = qxcard_open_partition (img, slot, qxl->mode, &qxl->base, &qxl->swap);
 	if (partfd == -1)
 	{
 	    free (img);

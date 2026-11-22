@@ -19,10 +19,11 @@ void swab16buf (void *buf, size_t n);   /* n must be even; involution */
 int qxcard_dispatch (int ac, char **av);
 
 /* ---- open a partition of a Q40 card image for the interactive engine ----
-   Opens `img`, finds AHDI slot `slot` (1..4), and returns the open file
-   descriptor with *base (byte offset of the partition) and *swap (1 if the
-   media is 16-bit byte-swapped) set.  Returns -1 on error, or 0 if `img` is
-   not an AHDI card (caller should fall back to a plain .WIN open). */
-int qxcard_open_partition (const char *img, int slot, off_t *base, int *swap);
+   Opens `img` with the given open(2) mode (O_RDONLY/O_RDWR), finds AHDI slot
+   `slot` (1..4), and returns the open file descriptor with *base (byte offset
+   of the partition) and *swap (1 if the media is 16-bit byte-swapped) set.
+   Returns -1 on error, or 0 if `img` is not an AHDI card (caller should fall
+   back to a plain .WIN open). */
+int qxcard_open_partition (const char *img, int slot, int mode, off_t *base, int *swap);
 
 #endif

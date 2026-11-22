@@ -777,14 +777,14 @@ static int cmd_help (void)
 
 /* ---- interactive partition open ---- */
 
-int qxcard_open_partition (const char *img, int slot, off_t *base, int *swap)
+int qxcard_open_partition (const char *img, int slot, int mode, off_t *base, int *swap)
 {
     int fd;
     unsigned char raw[512];
     ROOT r;
 
     if (!img || !base || !swap) return 0;
-    fd = open (img, O_RDONLY);
+    fd = open (img, mode);
     if (fd < 0) return 0;                     /* let caller fall back */
     if (read_sectors (fd, 0, raw, 1) != 0 || !parse_root_sector (raw, &r)) {
         close (fd);
