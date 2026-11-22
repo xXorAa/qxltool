@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <limits.h>
 
 #include "q40card.h"
 
@@ -538,6 +539,16 @@ static int cmd_extract (int ac, char **av)
     }
     if (!image) { fprintf (stderr, "usage: cardextract IMAGE [--partition N] [-o FILE | -d DIR]\n"); return 1; }
     if (outfile && sel == 0) { fprintf (stderr, "-o requires --partition N\n"); return 1; }
+
+    /* create the output directory if it does not exist */
+    if (!outfile && strcmp (outdir, ".") != 0) {
+        char cmd[PATH_MAX];
+        snprintf (cmd, sizeof (cmd), "mkdir -p '%s'", outdir);
+        if (system (cmd) != 0) {
+            fprintf (stderr, "cardextract: could not create dir %s\n", outdir);
+            return 1;
+        }
+    }
 
     fd = open (image, O_RDONLY);
     if (fd < 0) { perror (image); return 1; }
