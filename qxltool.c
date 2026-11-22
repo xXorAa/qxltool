@@ -49,6 +49,7 @@
 #include <zlib.h>
 
 #include "qxltool.h"
+#include "q40card.h"
 
 #define LINSIZ (256)
 
@@ -2582,7 +2583,13 @@ static void ShowCmdHelp()
         "give a -W option. This is to protect people from accidentally",
         "formatting an existing file/partition.",
         "",
-        "\tqxltool -W /tmp/oldqxl.win 8 QXL Disk Label", "","Good Luck!",
+        "\tqxltool -W /tmp/oldqxl.win 8 QXL Disk Label", "",
+        "Q40/Q60 CF-card and HDD image commands (run 'qxltool cardhelp' for details):",
+        "\tcardinfo IMAGE       inspect a card image or a .WIN file",
+        "\tcardbuild ... -o OUT build a card image from .WIN files",
+        "\tcardextract IMAGE    extract big-endian .WIN partitions",
+        "\tcardappend | carddrop | cardclonetable | cardswap | cardfixgeom",
+        "", "Good Luck!",
         NULL};
     char **p;
     for(p = txt;*p;p++)
@@ -2622,6 +2629,32 @@ int main (int ac, char **av)
     }
 
     fn = defargs (*(av + optind));
+
+    /* Q40/Q60 card subcommand dispatch: intercept before the QXL open path.
+       Supports both `qxltool cardinfo IMAGE` and `qxltool -c "cardinfo IMAGE"`. */
+    {
+        char *first = (ac - optind > 0) ? *(av + optind) : NULL;
+        if (lcmd == NULL && first && strncmp (first, "card", 4) == 0) {
+            int c = qxcard_dispatch (ac - optind, av + optind);
+            if (c >= 0)
+                return c;
+        }
+        if (lcmd && strncmp (lcmd, "card", 4) == 0) {
+            char cmd_[LINSIZ];
+            char *tok, *argv_[64];
+            int cargc = 0;
+            strncpy (cmd_, lcmd, sizeof (cmd_) - 1);
+            cmd_[sizeof (cmd_) - 1] = 0;
+            for (tok = strtok (cmd_, " \t"); tok && cargc < 63; tok = strtok (NULL, " \t"))
+                argv_[cargc++] = tok;
+            argv_[cargc] = NULL;
+            if (cargc) {
+                int c = qxcard_dispatch (cargc, argv_);
+                if (c >= 0)
+                    return c;
+            }
+        }
+    }
 
     qxl->mode |= defmod;
 

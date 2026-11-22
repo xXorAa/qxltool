@@ -1,0 +1,90 @@
+Q40/Q60 CF-card & HDD image support in qxltool
+==============================================
+
+qxltool can now build, inspect, and extract Q40/Q60 CF-card and HDD disk
+images, in addition to its existing single-.WIN-file filesystem access.
+
+Background
+----------
+A Q40/Q60 "card" image is a disk whose sector 0 holds an Atari-style (AHDI)
+partition table, with up to four QLWA (".WIN") filesystem partitions behind it.
+Two Q40-specific quirks matter and are handled automatically:
+
+* Byte-swap.  The Q40 reads its IDE registers through an ISA word window that
+  transposes the two bytes of every 16-bit unit.  Consequently both the AHDI
+  partition table and the contents of a native QWA partition are stored
+  byte-swapped on-media ('QLWA' appears as 'LQAW').  SMSQ/E 2.91 does NOT
+  auto-detect the table order, so we byte-swap the table by default.
+* CHS geometry.  Native QWA partitions use CHS addressing and the driver reads
+  the geometry (sectors/track, heads) from the .WIN header itself.  .WIN files
+  produced by QPC2/QXL/Q68/SMSQmulator carry 0/0 there and must be patched.
+  cardbuild does this, using the observed real-card geometry (16 heads x 63
+  sectors/track) unless overridden or harvested with --geometry-from.
+
+Commands
+--------
+  cardhelp
+      List the card commands.
+
+  cardswap IN OUT
+      Swap every 16-bit word of a file.  Escape hatch for hand-inspection.
+
+  cardinfo FILE
+      Inspect a card image or a bare .WIN file.  For a card: prints each valid
+      partition (index, type, start, size, end, overflow flag), then probes each
+      QWA partition's start sector for the QLWA signature, byte order, name and
+      geometry.  For a bare .WIN: full header dump plus a warning when geometry
+      is 0/0 (QPC2/Q68 style -- cardbuild patches this).  This is the go/no-go
+      diagnostic: a partition reading "bytes=swapped" ("LQAW") confirms the
+      whole byte-swap model.
+
+  cardbuild LAYOUT... -o OUT
+      Synthesize a card image from a set of .WIN files.  LAYOUT items are
+      FILE.WIN or blank:MiB (reserve an empty QWA partition to format on the
+      Q40 at full size).  Options:
+        --geometry-from CARD  harvest heads/sectors AND both byte orders from an
+                              existing card the Q40 formatted (strongly preferred
+                              over guessing)
+        --heads N --sectors N manual geometry (override)
+        --card-sectors N  total card size (ART_HDSIZ and capacity check)
+        --first-sector N  default 1 (Atari/MKpart convention)
+        --target N  IDE target number, for the printed WIN_DRIVE hints
+        --no-swap  do not byte-swap partition contents
+        --no-table-swap  write a plain big-endian table (only safe on SMSQ/E 3.x
+                         which auto-detects; WRONG for 2.91)
+        --keep-geometry  do not patch qwa_sctt/qwa_trkc/qwa_cyld
+        --yes  required to write to a device (-o /dev/rdiskN)
+      Writes the table first, then each partition in order.  Prints a
+      WIN_DRIVE n,target,0,p line per partition.
+
+  cardextract IMAGE [--partition N] [-o FILE | -d DIR]
+      Pull partitions out as big-endian .WIN files (un-swapping LQAW).  Streams
+      sector-aligned so it works on /dev/rdiskN.  --partition selects one slot
+      (by physical slot number 1..4); -o gives an exact output filename
+      (single partition only); -d sets the output directory (default ".").
+
+  cardappend DEVICE --win F.WIN [--slot] [--card-sectors N] [--target] --yes
+      Add a .WIN as a new partition in the free tail space after the last
+      partition.  Picks the first free slot, harvests geometry/order from the
+      card, checks capacity and the cylinder limit.  Writes the payload first
+      and verifies it, THEN writes sector 0, so a failed write leaves the
+      existing partitions intact.  Refuses when all four slots are full.
+
+  carddrop DEVICE --partition N --yes
+      Clear a partition entry (zero its 12 bytes in sector 0).  The filesystem
+      data is not erased; re-adding the same entry recovers it.  Warns when
+      dropping a non-final partition (leaves a hole append won't reuse).
+
+  cardclonetable SRC DST --yes
+      Copy sector 0 between cards, preserving byte order.  Reports the highest
+      sector referenced vs the destination size.
+
+Hard limits enforced
+--------------------
+  * At most 4 partitions (WIN_DRIVE masks the partition number with andi.b #3).
+  * CHS ceiling 65535 cylinders (error above), warning above 16383.
+  * Reject when used sectors exceed the card/image size.
+  * A DOS MBR signature (0x55AA/0xAA55 at 0x1FE) routes the whole drive to the
+    FAT32 path, so it is mutually exclusive with an Atari table -- we warn.
+
+Model source of truth: q40card_SPEC.md in ~/hermes/qldev.
