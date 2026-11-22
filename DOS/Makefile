@@ -5,6 +5,7 @@
 #| No Warranty                                                   |
 # ---------------------------------------------------------------
 VPATH = ../
+srcdir = ..
 
 DCC = gcc-go32
 
@@ -16,16 +17,18 @@ LIBS = -lz
 
 CFLAGS = -O3 -Wall -s -I. -I$(VPATH)  
 
-qxltool: qxltool.o version.h
+qxltool: qxltool.o
 	$(DCC) -s -o qxltool qxltool.o $(LIBS)
 	rm qxltool
 
-qxltool.o : qxltool.c qxltool.h version.h
+qxltool.o : qxltool.c qxltool.h $(CURDIR)/version.h
 	$(DCC) $(CFLAGS) $(DEFS) -c -o $@ $<
 
 qxltool.exe : qxltool
 
+include $(srcdir)/version.mk
+
 clean:
-	rm -f *.o *.exe *~
+	rm -f *.o *.exe *~ version.h
 
 

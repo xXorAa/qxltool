@@ -11,16 +11,18 @@ EXEEXT=@EXEEXT@
 qxltool: qxltool.o q40card.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o qxltool qxltool.o q40card.o $(LIBS)
 
-qxltool.o: $(srcdir)/qxltool.c $(srcdir)/qxltool.h $(srcdir)/q40card.h config.h $(srcdir)/version.h
+qxltool.o: $(srcdir)/qxltool.c $(srcdir)/qxltool.h $(srcdir)/q40card.h config.h $(CURDIR)/version.h
 	$(CC) $(CFLAGS) $(DEFS) -c $(srcdir)/qxltool.c
 
 q40card.o: $(srcdir)/q40card.c $(srcdir)/q40card.h config.h
 	$(CC) $(CFLAGS) $(DEFS) -c $(srcdir)/q40card.c
 
+include $(srcdir)/version.mk
+
 clean:
 	-rm -f *~
 	-rm -f '#*#'
-	-rm -f qxltool.o q40card.o
+	-rm -f qxltool.o q40card.o version.h
 
 distclean: clean
 	-rm -f config.h config.status config.cache
