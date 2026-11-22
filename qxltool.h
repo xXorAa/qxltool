@@ -131,6 +131,11 @@ typedef struct
     char fn[PATH_MAX];
     int mode;
     short fmode;
+    /* Partition window: byte offset of the filesystem within the image, and
+       whether the media is 16-bit byte-swapped (Q40 card).  base==0/swap==0
+       means a plain .WIN file, preserving legacy behaviour. */
+    off_t base;
+    int   swap;
 } QXL;
 
 #ifndef O_BINARY

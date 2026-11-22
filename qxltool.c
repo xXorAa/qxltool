@@ -197,12 +197,60 @@ static void h_normalise (HEADER * h)
     SW (h, map[0]);
 }
 
+/* ---- Partition-window I/O ------------------------------------------------
+   All raw filesystem I/O goes through these.  They (a) add qxl->base, the
+   byte offset of the filesystem within the underlying image, and (b) apply
+   the 16-bit byte transpose if the media is byte-swapped (Q40 card).  For a
+   plain .WIN file base==0 and swap==0, so these reduce to the old
+   lseek+read/write and existing behaviour is unchanged.
+   Note: offsets are relative to the filesystem start; qxl->h.sectc is the
+   sector (block) size in bytes, and the QLWA header/group map are at
+   filesystem offset 0.  The transpose is only valid on even lengths and
+   even file offsets, which every QLWA access satisfies. */
+
+static void qbswap16 (void *buf, size_t n)
+{
+    unsigned char *p = buf; size_t i;
+    for (i = 0; i + 1 < n; i += 2) {
+        unsigned char t = p[i]; p[i] = p[i+1]; p[i+1] = t;
+    }
+}
+
+static ssize_t qxl_read (QXL * qxl, off_t off, void *buf, size_t n)
+{
+    ssize_t r;
+    if (lseek (qxl->fd, qxl->base + off, SEEK_SET) < 0)
+        return -1;
+    if ((r = read (qxl->fd, buf, n)) < 0)
+        return -1;
+    if (qxl->swap && (size_t) r == n)
+        qbswap16 (buf, n);
+    return r;
+}
+
+static ssize_t qxl_write (QXL * qxl, off_t off, const void *buf, size_t n)
+{
+    ssize_t w;
+    if (qxl->swap) {
+        unsigned char *tmp = alloca (n ? n : 1);
+        memcpy (tmp, buf, n);
+        qbswap16 (tmp, n);
+        if (lseek (qxl->fd, qxl->base + off, SEEK_SET) < 0)
+            return -1;
+        w = write (qxl->fd, tmp, n);
+    } else {
+        if (lseek (qxl->fd, qxl->base + off, SEEK_SET) < 0)
+            return -1;
+        w = write (qxl->fd, buf, n);
+    }
+    return w;
+}
+
 static void writeheader (QXL * qxl)
 {
     HEADER h;
     int i;
     
-    lseek (qxl->fd, 0, SEEK_SET);
     qxl->h.access++;
     h = qxl->h;
     h.sectc >>= 9;
@@ -211,14 +259,13 @@ static void writeheader (QXL * qxl)
         if(h.name[i] == 0) h.name[i] = ' ';
     }
     h_normalise (&h);
-    write (qxl->fd, &h, sizeof (HEADER));
+    qxl_write (qxl, 0, &h, sizeof (HEADER));
     strim ((char *) h.name); 
 }
 
 static void readheader (QXL * qxl)
 {
-    lseek (qxl->fd, 0, SEEK_SET);
-    read (qxl->fd, &qxl->h, sizeof (HEADER));
+    qxl_read (qxl, 0, &qxl->h, sizeof (HEADER));
     h_normalise (&qxl->h);
     if (memcmp (qxl->h.id, "QLWA", 4) == 0)
     {
@@ -419,8 +466,7 @@ static u_short nextcluster (QXL * qxl, u_short c, short flag)
     u_short d;
 
     newoff = c * 2 + offsetof (HEADER, map);
-    lseek (qxl->fd, newoff, SEEK_SET);
-    read (qxl->fd, &d, sizeof (short));
+    qxl_read (qxl, newoff, &d, sizeof (short));
     d = swapword (d);
     if (d == 0 && flag)
     {
@@ -448,12 +494,11 @@ static QLDIR *readqldir (QXL * qxl, QLDIR * cur)
 
     for (fcluster = cur->map; (fcluster && dlen);)
     {
-	lseek (qxl->fd, fcluster * qxl->h.sectc, SEEK_SET);
 	if (dlen < qxl->h.sectc)
 	    rlen = dlen;
 	else
 	    rlen = qxl->h.sectc;
-	read (qxl->fd, p, rlen);
+	qxl_read (qxl, fcluster * qxl->h.sectc, p, rlen);
 	p += rlen;
 	dlen -= rlen;
 	fcluster = nextcluster (qxl, fcluster, 0);
@@ -474,12 +519,11 @@ static void writeqldir (QXL * qxl, QLDIR * cur, QLDIR * buf)
 
     for (clu = cur->map; dlen;)
     {
-	lseek (qxl->fd, clu * qxl->h.sectc, SEEK_SET);
 	if (dlen < qxl->h.sectc)
 	    rlen = dlen;
 	else
 	    rlen = qxl->h.sectc;
-	write (qxl->fd, p, rlen);
+	qxl_write (qxl, clu * qxl->h.sectc, p, rlen);
 	p += rlen;
 	dlen -= rlen;
 	if (dlen)
@@ -491,6 +535,31 @@ static void writeqldir (QXL * qxl, QLDIR * cur, QLDIR * buf)
 
 static int openqxl (QXL * qxl, char *fn)
 {
+    /* Support "card.img#N": open AHDI slot N of a Q40 card image. */
+    char *hash = strrchr (fn, '#');
+    if (hash && hash != fn && isdigit ((unsigned char) hash[1]))
+    {
+	int slot = atoi (hash + 1);
+	char *img = strndup (fn, hash - fn);
+	int partfd = qxcard_open_partition (img, slot, &qxl->base, &qxl->swap);
+	if (partfd == -1)
+	{
+	    free (img);
+	    return -1;
+	}
+	if (partfd > 0)
+	{
+	    qxl->fd = partfd;
+	    readheader (qxl);
+	    memcpy (&qxl->curd, &qxl->root, sizeof (QLDIR));
+	    strcpy (qxl->fn, fn);
+	    free (img);
+	    return qxl->fd;
+	}
+	/* not a card; fall through and open the literal filename */
+	free (img);
+    }
+
     if ((qxl->fd = open (fn, qxl->mode)) != -1)
     {
 	readheader (qxl);
@@ -669,12 +738,11 @@ static void cpfile (QXL * qxl, QLDIR * d)
     {
 	for (cluster = d->map; cluster; cluster = nextcluster (qxl, cluster, 0))
 	{
-	    lseek (qxl->fd, cluster * qxl->h.sectc, SEEK_SET);
 	    if (dlen < qxl->h.sectc)
 		rlen = dlen;
 	    else
 		rlen = qxl->h.sectc;
-	    read (qxl->fd, buf, rlen);
+	    qxl_read (qxl, cluster * qxl->h.sectc, buf, rlen);
 
 	    fwrite (buf + off, 1, rlen - off, qxl->fp);
 
@@ -731,9 +799,8 @@ static int qcp (QXL * qxl, short mflag, char **av)
 
 static void updatecluster (QXL * qxl, u_short f, u_short c)
 {
-    lseek (qxl->fd, f * 2 + sizeof (QLDIR), SEEK_SET);
     c = swapword (c);
-    write (qxl->fd, &c, sizeof (short));
+    qxl_write (qxl, f * 2 + sizeof (QLDIR), &c, sizeof (short));
 }
 
 static void updatefree (QXL * qxl, QLDIR * d)
@@ -1066,10 +1133,9 @@ static void makenewfile (QXL * qxl, char *fn1, QLDIR * ld, FILE * fp,
 		c = getcluster (qxl, c);
 		if (off)
 		{
-		    f->map = c;
+		f->map = c;
 		}
-		lseek (qxl->fd, c * qxl->h.sectc, SEEK_SET);
-		write (qxl->fd, buf, nr + off);
+		qxl_write (qxl, c * qxl->h.sectc, buf, nr + off);
 		off = 0;
 		nt += nr;
 		if (rem >= 0)
@@ -1085,8 +1151,7 @@ static void makenewfile (QXL * qxl, char *fn1, QLDIR * ld, FILE * fp,
     {
 	f->date = 0;
 	f->map = c = getcluster (qxl, 0);
-	lseek (qxl->fd, c * qxl->h.sectc, SEEK_SET);
-	write (qxl->fd, buf, qxl->h.sectc);
+	qxl_write (qxl, c * qxl->h.sectc, buf, qxl->h.sectc);
 	f->type = 0xff;
     }
 
@@ -1926,34 +1991,38 @@ static void init (QXL * qxl, char *lab, u_short bs, u_short ts)
 	qxl->h.access = 0;
 	memcpy (qxl->h.id, "QLWA", 4);
         ns = (qxl->h.total * 2 + bs - 1) / bs + 1;
-        lseek (qxl->fd, sizeof (QLDIR), SEEK_SET);
-	for(i=1; i<=ns-1; i++)
         {
-	    j=swapword(i);
-	    write (qxl->fd, &j, sizeof (short));
+            off_t poff = sizeof (QLDIR);
+            for (i=1; i<=ns-1; i++)
+            {
+                j=swapword(i);
+                qxl_write (qxl, poff, &j, sizeof (short));
+                poff += sizeof (short);
+            }
+            qxl->h.map[0]=1;  /* writeheader (over)writes this ! */
+            j=0;
+            qxl_write(qxl, poff, &j, 2); poff += 2; i++; /* EOF MAP */
+
+            qxl->h.formatted = (qxl->h.total*2+511+0x40)/512;
+                             /* this appears to be the length of map in sectors..*/
+
+            qxl->h.direct = i-1;
+            qxl_write(qxl, poff, &j, 2); poff += 2; i++; /* EOF DIR */
+
+            qxl->h.first = i-1;
+
+            for (i = qxl->h.first; i < qxl->h.total - 1;)
+            {
+                i++;
+                j = swapword (i);
+                qxl_write (qxl, poff, &j, sizeof (short));
+                poff += sizeof (short);
+            }
+
+            j = 0;
+            qxl_write (qxl, poff, &j, sizeof (short));
         }
-	qxl->h.map[0]=1;  /* writeheader (over)writes this ! */
-	j=0;
-	write(qxl->fd,&j,2);i++; /* EOF MAP */
 
-	qxl->h.formatted = (qxl->h.total*2+511+0x40)/512;
-                         /* this appears to be the length of map in sectors..*/
-
-	qxl->h.direct = i-1;
-	write(qxl->fd,&j,2);i++; /* EOF DIR */
-        
-	qxl->h.first = i-1;
-        
-	for (i = qxl->h.first; i < qxl->h.total - 1;)
-	{
-	    i++;
-	    j = swapword (i);
-	    write (qxl->fd, &j, sizeof (short));
-	}
-
-	j = 0;
-	write (qxl->fd, &j, sizeof (short));
-        
 	qxl->h.free = qxl->h.total - ns - 1;
 	qxl->h.dlen = sizeof (QLDIR);
 	srand (time (NULL));
@@ -1961,7 +2030,6 @@ static void init (QXL * qxl, char *lab, u_short bs, u_short ts)
 
 	writeheader (qxl);
 
-	lseek (qxl->fd, bs * qxl->h.direct, SEEK_SET);
 	l = alloca (bs);
 	memset (l, 0, bs);
 	fputs ("Formatting ....", stdout);
@@ -1969,9 +2037,9 @@ static void init (QXL * qxl, char *lab, u_short bs, u_short ts)
 	k = j = qxl->h.total / 20;
 	m = 5;
 
-	for (i = qxl->h.direct; i < qxl->h.total; i++)
+	for (i = qxl->h.direct; (size_t) i < qxl->h.total; i++)
 	{
-	    if (write (qxl->fd, l, bs) != bs)
+	    if (qxl_write (qxl, (off_t) i * bs, l, bs) != (ssize_t) bs)
 	    {
 		perror ("Format");
 		exit (0);
@@ -2728,7 +2796,8 @@ int main (int ac, char **av)
     }
     else
     {
-        ShowCmdHelp();       
+        ShowCmdHelp();
+        return 1;   /* failed to open the file/partition */
     }
 
     return 0;

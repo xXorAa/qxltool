@@ -775,6 +775,50 @@ static int cmd_help (void)
     return 1;
 }
 
+/* ---- interactive partition open ---- */
+
+int qxcard_open_partition (const char *img, int slot, off_t *base, int *swap)
+{
+    int fd;
+    unsigned char raw[512];
+    ROOT r;
+
+    if (!img || !base || !swap) return 0;
+    fd = open (img, O_RDONLY);
+    if (fd < 0) return 0;                     /* let caller fall back */
+    if (read_sectors (fd, 0, raw, 1) != 0 || !parse_root_sector (raw, &r)) {
+        close (fd);
+        return 0;                             /* not an AHDI card */
+    }
+    if (slot < 1 || slot > r.n) {
+        fprintf (stderr, "slot %d not found on %s\n", slot, img);
+        close (fd);
+        return -1;
+    }
+    /* The partition's owning slot (r.parts[] is compacted; find by slot) */
+    {
+        int i, found = 0;
+        for (i = 0; i < r.n; i++)
+            if (r.parts[i].slot == slot) { found = 1; break; }
+        if (!found) {
+            fprintf (stderr, "slot %d not found on %s\n", slot, img);
+            close (fd);
+            return -1;
+        }
+        *base = (off_t) r.parts[i].start * SECTOR;
+        /* content byte order comes from the partition's QLWA signature */
+        {
+            int cs = 0;
+            unsigned char hdr[512];
+            if (qwa_read_hdr (fd, r.parts[i].start, hdr, &cs))
+                *swap = cs;
+            else
+                *swap = (r.order == ORDER_SWAPPED);   /* conservative guess */
+        }
+    }
+    return fd;
+}
+
 int qxcard_dispatch (int ac, char **av)
 {
     if (ac < 1 || !av[0]) return -1;   /* nothing to dispatch */
