@@ -32,7 +32,7 @@ else
 endif
 
 SRC = qxltool.txt README.QXL qxltool.h qxltool.c Makefile version.h COPYING \
-	INSTALL Makefile.in config.h.in configure.ac configure
+	INSTALL Makefile.in version.mk config.h.in configure.ac configure
 
 all: domake
 
@@ -70,8 +70,8 @@ dist:   $(SRC)
 	@ echo ""
 #	cp qxltool.zip /home/jrh/Comms/WebPage/misc/qxltool.zip
 
-Unix/Makefile:
+Unix/Makefile: Makefile.in
 	cd Unix ; ../configure
 
-NT/Makefile:
+NT/Makefile: Makefile.in
 	cd NT ; ../configure

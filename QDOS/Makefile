@@ -5,6 +5,7 @@
 #| No Warranty                                                   |
 # ---------------------------------------------------------------
 VPATH = ../
+srcdir = ..
 
 DEFS = -DHAVE_CONFIG_H
 
@@ -18,9 +19,11 @@ qxltool: qxltool.o
 	ls -l qxltool
 	qcp qxltool /ql/exe/qxltool
 
-qxltool.o : ../qxltool.c ../qxltool.h ../version.h
+qxltool.o : ../qxltool.c ../qxltool.h $(CURDIR)/version.h
 	$(QCC) $(QFLAGS) -c -o $@ $<
 
+include $(srcdir)/version.mk
+
 clean:
-	rm -f *.o qxltool
+	rm -f *.o qxltool version.h
 

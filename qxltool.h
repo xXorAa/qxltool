@@ -14,7 +14,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
-#include "version.h"
+#include <version.h>
 
 #define UNIX2QL    283996800
 #define QL2UNIX   -(UNIX2QL)
